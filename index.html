@@ -102,11 +102,11 @@ strong{color:var(--text)}
       <span>Target interval: <strong id="barTarget">500 ms</strong></span>
       <span>White marker = target length</span>
     </div>
-    <p class="note">Each bar represents the time between two consecutive detected note attacks. The target length is the same for all four bars. Blue = short/early, green = close to target, red = long/late. The scale is capped at 150% of the target interval.</p>
+    <p class="note">Each bar represents the time between two consecutive detected note attacks. The target length is the same for all four bars. Blue = short/early, green = close to target, red = long/late. Bars appear together after the fifth note, once four complete intervals are available. The scale is capped at 150% of the target interval.</p>
   </section>
 
   <section class="panel">
-    <div class="graphhead"><h2>Timing variation</h2><span>Latest note stays at the center</span></div>
+    <div class="graphhead"><h2>Timing variation</h2><span>Scrolls left in real time</span></div>
     <canvas id="chart" aria-label="Graph of interval timing errors"></canvas>
     <div class="legend">
       <span><i class="key" style="background:#fca5a5"></i>Late interval (longer than target)</span>
@@ -173,9 +173,9 @@ strong{color:var(--text)}
     const w=rect.width,h=rect.height;
     ctx.clearRect(0,0,w,h);
     const left=42,right=12,top=18,bottom=28,gw=w-left-right,gh=h-top-bottom,mid=top+gh/2;
-    const scale=100; // milliseconds for top/bottom
+    const scale=300; // milliseconds for top/bottom; wider lead/lag range
     ctx.font='11px -apple-system, sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
-    [-100,-50,0,50,100].forEach(v=>{
+    [-300,-150,0,150,300].forEach(v=>{
       const y=mid-(v/scale)*(gh/2);
       ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);
       ctx.strokeStyle=v===0?'#91a3c6':'#283652';ctx.lineWidth=v===0?1.5:1;ctx.stroke();
@@ -190,19 +190,19 @@ strong{color:var(--text)}
       ctx.fillStyle='#8998b5';ctx.fillText(age===0?'now':`-${age.toFixed(age%1?1:0)}s`,x,h-bottom+7);
     });
     // Latest note is centered; prior events shift left according to age.
-    const newest=lastNoteTime===null?now():lastNoteTime;
-    const centerX=left+gw*.5;
+    const newest=now();
+    const centerX=left+gw;
     points.forEach(p=>{
       const age=(newest-p.time)/1000;
       if(age<0 || age>win)return;
-      const x=centerX-(age/win)*(gw*.5);
+      const x=left+gw*(1-age/win);
       const clipped=Math.max(-scale,Math.min(scale,p.error));
       const y=mid-(clipped/scale)*(gh/2);
       const color=p.error>12?'#fca5a5':p.error< -12?'#7dd3fc':'#86efac';
       ctx.beginPath();ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
       ctx.strokeStyle='#0c1426';ctx.lineWidth=1.5;ctx.stroke();
     });
-    // Center marker for newest event
+    // Right-edge marker represents the current time; points drift left as time passes.
     ctx.beginPath();ctx.moveTo(centerX,top);ctx.lineTo(centerX,top+gh);ctx.strokeStyle='#7dd3fc';ctx.setLineDash([4,5]);ctx.stroke();ctx.setLineDash([]);
     if(points.length===0){
       ctx.fillStyle='#8b9bb9';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='14px -apple-system, sans-serif';
@@ -213,12 +213,15 @@ strong{color:var(--text)}
   function renderFourBars(){
     const target=targetMs();
     $('barTarget').textContent=`${Math.round(target)} ms`;
-    const recent=points.slice(-4);
     const rows=$('intervalBars').querySelectorAll('.interval-row');
+    // Keep all four bars blank until five note attacks have produced four complete intervals.
+    // Thereafter, refresh the full set together after each new note.
+    const ready=points.length>=4;
+    const recent=ready?points.slice(-4):[];
     rows.forEach((row,i)=>{
       const fill=row.querySelector('.interval-fill');
       const value=row.querySelector('.interval-value');
-      if(i>=recent.length){
+      if(!ready || i>=recent.length){
         fill.style.width='0%';
         fill.style.background='var(--green)';
         value.textContent='Waiting';
@@ -272,8 +275,8 @@ strong{color:var(--text)}
         }
         fluxHistory.push(score);if(fluxHistory.length>35)fluxHistory.shift();
         prevSpectrum.set(curr);
-        // Keep the visual center/time labels fresh while listening.
-        if(++frameCount%4===0)draw();
+        // The separate animation loop scrolls the plot continuously, even between notes.
+        frameCount++;
         rafId=requestAnimationFrame(loop);
       };
       // Seed the previous spectrum from the current frame.
@@ -293,6 +296,14 @@ strong{color:var(--text)}
     $('startMic').disabled=false;$('stopMic').disabled=true;
     if($('statusText').textContent.startsWith('Listening'))setStatus('Microphone off.');
   }
+  // Redraw continuously so the time window advances even when no new note is detected.
+  let paintId=null;
+  function animate(){
+    if(!document.hidden) draw();
+    paintId=requestAnimationFrame(animate);
+  }
+  animate();
+
   $('startMic').addEventListener('click',startMic);
   $('stopMic').addEventListener('click',stopMic);
   $('tapBtn').addEventListener('click',()=>addNote(now(),'Tap'));
@@ -305,7 +316,7 @@ strong{color:var(--text)}
   [bpmEl,noteEl,windowEl].forEach(el=>el.addEventListener('input',updateTarget));
   $('sensitivity').addEventListener('input',()=>{$('sensLabel').textContent=$('sensitivity').value;});
   window.addEventListener('resize',draw);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden && running)setStatus('Listening in background may pause. Return to this tab to continue.',true);});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden && running)setStatus('Listening in background may pause. Return to this tab to continue.',true);else draw();});
   updateTarget();
 })();
 </script>
