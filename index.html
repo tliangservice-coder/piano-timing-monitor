@@ -113,7 +113,7 @@ strong{color:var(--text)}
       <span><i class="key" style="background:#7dd3fc"></i>Early interval (shorter than target)</span>
       <span><i class="key" style="background:#86efac"></i>On target</span>
     </div>
-    <p class="note">Each point compares the time since the previous detected note with your target interval. Above zero = late/too long; below zero = early/too short. This measures spacing between notes, not whether the whole phrase is ahead of the beat.</p>
+    <p class="note">Each point shows interval error as a percentage of the target interval, from -100% to +100%. Points outside that range are omitted. Above zero = late/too long; below zero = early/too short. This measures spacing between notes, not whether the whole phrase is ahead of the beat.</p>
   </section>
 
   <section class="panel">
@@ -141,7 +141,7 @@ strong{color:var(--text)}
     if(lastNoteTime!==null){
       interval=t-lastNoteTime;
       error=interval-targetMs();
-      points.push({time:t,error,interval});
+      points.push({time:t,error,interval,errorPct:(error/targetMs())*100});
       if(points.length>250) points.shift();
       renderFourBars();
       $('lastErr').textContent=fmt(error);
@@ -173,15 +173,15 @@ strong{color:var(--text)}
     const w=rect.width,h=rect.height;
     ctx.clearRect(0,0,w,h);
     const left=42,right=12,top=18,bottom=28,gw=w-left-right,gh=h-top-bottom,mid=top+gh/2;
-    const scale=300; // milliseconds for top/bottom; wider lead/lag range
+    const scale=100; // percentage error range: -100% to +100%
     ctx.font='11px -apple-system, sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
-    [-300,-150,0,150,300].forEach(v=>{
+    [-100,-50,0,50,100].forEach(v=>{
       const y=mid-(v/scale)*(gh/2);
       ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);
       ctx.strokeStyle=v===0?'#91a3c6':'#283652';ctx.lineWidth=v===0?1.5:1;ctx.stroke();
-      ctx.fillStyle=v===0?'#e5edff':'#8998b5';ctx.fillText(`${v>0?'+':''}${v}`,left-7,y);
+      ctx.fillStyle=v===0?'#e5edff':'#8998b5';ctx.fillText(`${v>0?'+':''}${v}%`,left-7,y);
     });
-    ctx.fillStyle='#8998b5';ctx.textAlign='left';ctx.fillText('ms',8,top-4);
+    ctx.fillStyle='#8998b5';ctx.textAlign='left';ctx.fillText('error',5,top-4);
     const win=Number(windowEl.value)||6;
     ctx.textAlign='center';ctx.textBaseline='top';
     [win,win*.75,win*.5,win*.25,0].forEach(age=>{
@@ -196,8 +196,10 @@ strong{color:var(--text)}
       const age=(newest-p.time)/1000;
       if(age<0 || age>win)return;
       const x=left+gw*(1-age/win);
-      const clipped=Math.max(-scale,Math.min(scale,p.error));
-      const y=mid-(clipped/scale)*(gh/2);
+      const pct=p.errorPct;
+      // Omit outliers outside the visible +/-100% error range instead of pinning them to the edge.
+      if(pct < -100 || pct > 100) return;
+      const y=mid-(pct/scale)*(gh/2);
       const color=p.error>12?'#fca5a5':p.error< -12?'#7dd3fc':'#86efac';
       ctx.beginPath();ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
       ctx.strokeStyle='#0c1426';ctx.lineWidth=1.5;ctx.stroke();
