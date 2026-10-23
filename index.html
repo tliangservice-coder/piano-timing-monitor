@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>Piano Timing Monitor</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#151d31;--panel2:#1b2640;--text:#eef3ff;--muted:#9eacc8;--line:#34415f;--accent:#7dd3fc;--green:#86efac;--red:#fca5a5}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#0b1020,#10182b);color:var(--text);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom)}
+main{max-width:900px;margin:0 auto;padding:16px 0 28px}
+h1{font-size:clamp(25px,6vw,34px);margin:4px 0 4px;letter-spacing:-.6px}
+.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
+.panel{background:rgba(21,29,49,.96);border:1px solid #263451;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 8px 28px #0002}
+.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+input,select,button{font:inherit}
+input[type=number],select{width:100%;background:#0d1528;border:1px solid #3b4968;border-radius:10px;padding:11px;color:var(--text);min-height:44px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+button{border:0;border-radius:12px;padding:12px 14px;min-height:46px;font-weight:650;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+.primary{background:var(--accent);color:#082032}
+.secondary{background:#2a3856;color:var(--text);border:1px solid #425274}
+.danger{background:#442631;color:#ffdce3;border:1px solid #74404e}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.status{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:14px;margin-top:12px}
+.dotstatus{width:10px;height:10px;border-radius:50%;background:#64748b;flex:0 0 auto}
+.dotstatus.on{background:#86efac;box-shadow:0 0 0 4px #86efac20}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:#0d1528;border-radius:12px;padding:12px 10px;min-width:0}
+.stat .value{font-size:clamp(19px,5vw,26px);font-weight:750;white-space:nowrap}
+.stat .label{font-size:12px;color:var(--muted);margin-top:2px}
+.graphhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.graphhead h2{font-size:18px;margin:0}
+.graphhead span{font-size:12px;color:var(--muted)}
+canvas{display:block;width:100%;height:280px;margin-top:10px;border-radius:12px;background:#0c1426;touch-action:pan-y}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.key{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+.note{color:var(--muted);font-size:13px;margin:10px 0 0}
+#eventLog{max-height:130px;overflow:auto;font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}
+.logrow{display:flex;justify-content:space-between;border-bottom:1px solid #27334c;padding:5px 0;gap:12px}
+strong{color:var(--text)}
+@media(min-width:700px){.controls{grid-template-columns:repeat(4,minmax(0,1fr))}.panel{padding:20px}canvas{height:320px}}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎹 Piano Timing Monitor</h1>
+  <p class="sub">Listen for repeated notes and see how evenly spaced they are.</p>
+
+  <section class="panel">
+    <div class="controls">
+      <div><label for="bpm">Tempo (BPM)</label><input id="bpm" type="number" min="30" max="300" value="120" inputmode="decimal"></div>
+      <div><label for="meter">Time signature (display only)</label><select id="meter"><option>2/4</option><option>3/4</option><option selected>4/4</option><option>5/4</option><option>6/8</option><option>7/8</option><option>9/8</option><option>12/8</option></select></div>
+      <div><label for="noteValue">Repeated note value</label><select id="noteValue"><option value="2">Half note</option><option value="1" selected>Quarter note</option><option value="0.5">Eighth note</option><option value="0.25">Sixteenth note</option><option value="1.5">Dotted quarter</option><option value="0.75">Dotted eighth</option></select></div>
+      <div><label for="windowSec">Graph window</label><select id="windowSec"><option value="4">4 seconds</option><option value="6" selected>6 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option></select></div>
+    </div>
+    <p class="note" id="targetText">Target interval: 500 ms between notes.</p>
+    <div class="buttons">
+      <button class="primary" id="startMic">Start microphone</button>
+      <button class="secondary" id="tapBtn">Add note manually</button>
+      <button class="secondary" id="stopMic" disabled>Stop microphone</button>
+      <button class="danger" id="resetBtn">Reset graph</button>
+    </div>
+    <div class="status"><span id="statusDot" class="dotstatus"></span><span id="statusText">Microphone off. Tap Start microphone and allow access.</span></div>
+    <div style="margin-top:12px">
+      <label for="sensitivity">Onset sensitivity <span id="sensLabel">5</span> / 10</label>
+      <input id="sensitivity" type="range" min="1" max="10" value="5">
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="stats">
+      <div class="stat"><div class="value" id="lastErr">—</div><div class="label">Latest interval error</div></div>
+      <div class="stat"><div class="value" id="avgAbs">—</div><div class="label">Average absolute error</div></div>
+      <div class="stat"><div class="value" id="count">0</div><div class="label">Intervals measured</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="graphhead"><h2>Timing variation</h2><span>Latest note stays at the center</span></div>
+    <canvas id="chart" aria-label="Graph of interval timing errors"></canvas>
+    <div class="legend">
+      <span><i class="key" style="background:#fca5a5"></i>Late interval (longer than target)</span>
+      <span><i class="key" style="background:#7dd3fc"></i>Early interval (shorter than target)</span>
+      <span><i class="key" style="background:#86efac"></i>On target</span>
+    </div>
+    <p class="note">Each point compares the time since the previous detected note with your target interval. Above zero = late/too long; below zero = early/too short. This measures spacing between notes, not whether the whole phrase is ahead of the beat.</p>
+  </section>
+
+  <section class="panel">
+    <div class="graphhead"><h2>Recent detections</h2><span>Newest first</span></div>
+    <div id="eventLog" style="margin-top:8px">No notes detected yet.</div>
+    <p class="note">For best results, place the phone near the piano but away from loud speakers. The microphone detector is experimental: chords, sustain pedal, room noise, and very fast notes can cause missed or extra detections. Manual tap is available as a fallback.</p>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const bpmEl=$('bpm'), noteEl=$('noteValue'), windowEl=$('windowSec');
+  const canvas=$('chart'), ctx=canvas.getContext('2d');
+  const points=[]; // {time, error, interval}
+  const log=[];
+  let audioCtx=null, stream=null, analyser=null, source=null, rafId=null;
+  let prevSpectrum=null, fluxHistory=[], lastOnset=-Infinity, lastNoteTime=null;
+  let running=false, frameCount=0;
+  const now=()=>performance.now();
+  function targetMs(){const bpm=Math.min(300,Math.max(30,Number(bpmEl.value)||120)); return 60000/bpm*Number(noteEl.value);}
+  function updateTarget(){ $('targetText').textContent=`Target interval: ${Math.round(targetMs())} ms between notes.`; draw(); }
+  function fmt(ms){if(ms===null || !Number.isFinite(ms))return '—';return `${ms>0?'+':''}${Math.round(ms)} ms`;}
+  function addNote(t=now(), sourceName='Manual'){
+    let interval=null,error=null;
+    if(lastNoteTime!==null){
+      interval=t-lastNoteTime;
+      error=interval-targetMs();
+      points.push({time:t,error,interval});
+      if(points.length>250) points.shift();
+      $('lastErr').textContent=fmt(error);
+      const relevant=points.slice(-30);
+      $('avgAbs').textContent=`${Math.round(relevant.reduce((s,p)=>s+Math.abs(p.error),0)/Math.max(1,relevant.length))} ms`;
+      $('count').textContent=points.length;
+      log.unshift({time:new Date().toLocaleTimeString([], {minute:'2-digit',second:'2-digit'}), interval, error, sourceName});
+      if(log.length>10)log.pop();
+      renderLog();
+    } else {
+      $('lastErr').textContent='Waiting';
+      $('avgAbs').textContent='—';
+      log.unshift({time:new Date().toLocaleTimeString([], {minute:'2-digit',second:'2-digit'}), interval:null, error:null, sourceName});
+      if(log.length>10)log.pop();
+      renderLog();
+    }
+    lastNoteTime=t;
+    draw();
+  }
+  function renderLog(){
+    $('eventLog').innerHTML=log.map(e=>`<div class="logrow"><span>${e.time} · ${e.sourceName}</span><span>${e.interval===null?'First note':`${Math.round(e.interval)} ms · ${fmt(e.error)}`}</span></div>`).join('');
+  }
+  function draw(){
+    const rect=canvas.getBoundingClientRect();
+    if(!rect.width || !rect.height)return;
+    const dpr=Math.max(1,window.devicePixelRatio||1);
+    canvas.width=Math.round(rect.width*dpr); canvas.height=Math.round(rect.height*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const w=rect.width,h=rect.height;
+    ctx.clearRect(0,0,w,h);
+    const left=42,right=12,top=18,bottom=28,gw=w-left-right,gh=h-top-bottom,mid=top+gh/2;
+    const scale=100; // milliseconds for top/bottom
+    ctx.font='11px -apple-system, sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
+    [-100,-50,0,50,100].forEach(v=>{
+      const y=mid-(v/scale)*(gh/2);
+      ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);
+      ctx.strokeStyle=v===0?'#91a3c6':'#283652';ctx.lineWidth=v===0?1.5:1;ctx.stroke();
+      ctx.fillStyle=v===0?'#e5edff':'#8998b5';ctx.fillText(`${v>0?'+':''}${v}`,left-7,y);
+    });
+    ctx.fillStyle='#8998b5';ctx.textAlign='left';ctx.fillText('ms',8,top-4);
+    const win=Number(windowEl.value)||6;
+    ctx.textAlign='center';ctx.textBaseline='top';
+    [win,win*.75,win*.5,win*.25,0].forEach(age=>{
+      const x=left+gw*(1-age/win);
+      ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+gh);ctx.strokeStyle='#1e2b45';ctx.stroke();
+      ctx.fillStyle='#8998b5';ctx.fillText(age===0?'now':`-${age.toFixed(age%1?1:0)}s`,x,h-bottom+7);
+    });
+    // Latest note is centered; prior events shift left according to age.
+    const newest=lastNoteTime===null?now():lastNoteTime;
+    const centerX=left+gw*.5;
+    points.forEach(p=>{
+      const age=(newest-p.time)/1000;
+      if(age<0 || age>win)return;
+      const x=centerX-(age/win)*(gw*.5);
+      const clipped=Math.max(-scale,Math.min(scale,p.error));
+      const y=mid-(clipped/scale)*(gh/2);
+      const color=p.error>12?'#fca5a5':p.error< -12?'#7dd3fc':'#86efac';
+      ctx.beginPath();ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+      ctx.strokeStyle='#0c1426';ctx.lineWidth=1.5;ctx.stroke();
+    });
+    // Center marker for newest event
+    ctx.beginPath();ctx.moveTo(centerX,top);ctx.lineTo(centerX,top+gh);ctx.strokeStyle='#7dd3fc';ctx.setLineDash([4,5]);ctx.stroke();ctx.setLineDash([]);
+    if(points.length===0){
+      ctx.fillStyle='#8b9bb9';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='14px -apple-system, sans-serif';
+      ctx.fillText('Play repeated notes to plot timing',w/2,h/2);
+    }
+  }
+  function setStatus(text,on=false){$('statusText').textContent=text;$('statusDot').classList.toggle('on',on);}
+  async function startMic(){
+    if(running)return;
+    if(!navigator.mediaDevices?.getUserMedia){setStatus('Microphone access needs a modern browser and HTTPS. Open the published page in Safari.');return;}
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false});
+      audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended')await audioCtx.resume();
+      analyser=audioCtx.createAnalyser();analyser.fftSize=2048;analyser.smoothingTimeConstant=0;
+      source=audioCtx.createMediaStreamSource(stream);source.connect(analyser);
+      prevSpectrum=new Float32Array(analyser.frequencyBinCount);
+      fluxHistory=[];lastOnset=-Infinity;frameCount=0;running=true;
+      $('startMic').disabled=true;$('stopMic').disabled=false;
+      setStatus('Listening. Play one clear, repeated note at a time.',true);
+      const curr=new Float32Array(analyser.frequencyBinCount);
+      const loop=()=>{
+        if(!running)return;
+        analyser.getFloatFrequencyData(curr);
+        let flux=0, energy=0;
+        for(let i=2;i<curr.length;i++){
+          // Work in normalized linear magnitudes; positive spectral changes indicate a new attack.
+          const mag=Math.pow(10,curr[i]/20);
+          const old=Math.pow(10,prevSpectrum[i]/20);
+          const diff=mag-old;
+          if(diff>0)flux+=diff;
+          energy+=mag;
+        }
+        // Ignore near-silence and very low-frequency rumble.
+        const score=flux/(energy+0.00001);
+        const historyMean=fluxHistory.length?fluxHistory.reduce((a,b)=>a+b,0)/fluxHistory.length:0;
+        const sens=Number($('sensitivity').value);
+        const threshold=0.018+(11-sens)*0.004;
+        const adaptive=Math.max(threshold,historyMean*(1.8+(11-sens)*0.12));
+        const t=now();
+        if(energy>0.025 && score>adaptive && t-lastOnset>150){
+          addNote(t,'Mic');lastOnset=t;
+        }
+        fluxHistory.push(score);if(fluxHistory.length>35)fluxHistory.shift();
+        prevSpectrum.set(curr);
+        // Keep the visual center/time labels fresh while listening.
+        if(++frameCount%4===0)draw();
+        rafId=requestAnimationFrame(loop);
+      };
+      // Seed the previous spectrum from the current frame.
+      analyser.getFloatFrequencyData(prevSpectrum);
+      loop();
+    }catch(err){
+      setStatus(err?.name==='NotAllowedError'?'Microphone permission was denied. Allow it in Safari Settings, then try again.':`Could not start microphone: ${err.message||err}`);
+      stopMic();
+    }
+  }
+  function stopMic(){
+    running=false;
+    if(rafId)cancelAnimationFrame(rafId);rafId=null;
+    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+    if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null;}
+    analyser=null;source=null;prevSpectrum=null;
+    $('startMic').disabled=false;$('stopMic').disabled=true;
+    if($('statusText').textContent.startsWith('Listening'))setStatus('Microphone off.');
+  }
+  $('startMic').addEventListener('click',startMic);
+  $('stopMic').addEventListener('click',stopMic);
+  $('tapBtn').addEventListener('click',()=>addNote(now(),'Tap'));
+  $('resetBtn').addEventListener('click',()=>{
+    points.length=0;log.length=0;lastNoteTime=null;
+    $('lastErr').textContent='—';$('avgAbs').textContent='—';$('count').textContent='0';
+    $('eventLog').textContent='No notes detected yet.';draw();
+  });
+  [bpmEl,noteEl,windowEl].forEach(el=>el.addEventListener('input',updateTarget));
+  $('sensitivity').addEventListener('input',()=>{$('sensLabel').textContent=$('sensitivity').value;});
+  window.addEventListener('resize',draw);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden && running)setStatus('Listening in background may pause. Return to this tab to continue.',true);});
+  updateTarget();
+})();
+</script>
+</body>
+</html>
