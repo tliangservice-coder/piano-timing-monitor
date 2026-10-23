@@ -42,6 +42,17 @@ canvas{display:block;width:100%;height:280px;margin-top:10px;border-radius:12px;
 .logrow{display:flex;justify-content:space-between;border-bottom:1px solid #27334c;padding:5px 0;gap:12px}
 strong{color:var(--text)}
 @media(min-width:700px){.controls{grid-template-columns:repeat(4,minmax(0,1fr))}.panel{padding:20px}canvas{height:320px}}
+
+.interval-bars{display:flex;flex-direction:column;gap:13px;margin-top:16px}
+.interval-row{display:grid;grid-template-columns:88px minmax(0,1fr) 88px;align-items:center;gap:9px}
+.interval-label,.interval-value{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.interval-value{text-align:right;white-space:nowrap}
+.interval-track{height:20px;position:relative;background:#0c1426;border-radius:5px;overflow:visible;border:1px solid #2b3954}
+.interval-fill{height:100%;width:0%;border-radius:4px;transition:width .18s ease;background:var(--green)}
+.interval-track:after{content:"";position:absolute;left:66.666%;top:-4px;bottom:-4px;width:2px;background:#eef3ff;opacity:.8;pointer-events:none}
+.interval-key{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+@media(max-width:390px){.interval-row{grid-template-columns:72px minmax(0,1fr) 76px;gap:6px}.interval-label,.interval-value{font-size:11px}}
+
 </style>
 </head>
 <body>
@@ -78,6 +89,22 @@ strong{color:var(--text)}
     </div>
   </section>
 
+
+  <section class="panel">
+    <div class="graphhead"><h2>Last four note intervals</h2><span>Shorter = early · Longer = late</span></div>
+    <div class="interval-bars" id="intervalBars" aria-live="polite">
+      <div class="interval-row"><span class="interval-label">Interval 1</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
+      <div class="interval-row"><span class="interval-label">Interval 2</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
+      <div class="interval-row"><span class="interval-label">Interval 3</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
+      <div class="interval-row"><span class="interval-label">Interval 4</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
+    </div>
+    <div class="interval-key">
+      <span>Target interval: <strong id="barTarget">500 ms</strong></span>
+      <span>White marker = target length</span>
+    </div>
+    <p class="note">Each bar represents the time between two consecutive detected note attacks. The target length is the same for all four bars. Blue = short/early, green = close to target, red = long/late. The scale is capped at 150% of the target interval.</p>
+  </section>
+
   <section class="panel">
     <div class="graphhead"><h2>Timing variation</h2><span>Latest note stays at the center</span></div>
     <canvas id="chart" aria-label="Graph of interval timing errors"></canvas>
@@ -107,7 +134,7 @@ strong{color:var(--text)}
   let running=false, frameCount=0;
   const now=()=>performance.now();
   function targetMs(){const bpm=Math.min(300,Math.max(30,Number(bpmEl.value)||120)); return 60000/bpm*Number(noteEl.value);}
-  function updateTarget(){ $('targetText').textContent=`Target interval: ${Math.round(targetMs())} ms between notes.`; draw(); }
+  function updateTarget(){ $('targetText').textContent=`Target interval: ${Math.round(targetMs())} ms between notes.`; renderFourBars(); draw(); }
   function fmt(ms){if(ms===null || !Number.isFinite(ms))return '—';return `${ms>0?'+':''}${Math.round(ms)} ms`;}
   function addNote(t=now(), sourceName='Manual'){
     let interval=null,error=null;
@@ -116,6 +143,7 @@ strong{color:var(--text)}
       error=interval-targetMs();
       points.push({time:t,error,interval});
       if(points.length>250) points.shift();
+      renderFourBars();
       $('lastErr').textContent=fmt(error);
       const relevant=points.slice(-30);
       $('avgAbs').textContent=`${Math.round(relevant.reduce((s,p)=>s+Math.abs(p.error),0)/Math.max(1,relevant.length))} ms`;
@@ -181,6 +209,30 @@ strong{color:var(--text)}
       ctx.fillText('Play repeated notes to plot timing',w/2,h/2);
     }
   }
+
+  function renderFourBars(){
+    const target=targetMs();
+    $('barTarget').textContent=`${Math.round(target)} ms`;
+    const recent=points.slice(-4);
+    const rows=$('intervalBars').querySelectorAll('.interval-row');
+    rows.forEach((row,i)=>{
+      const fill=row.querySelector('.interval-fill');
+      const value=row.querySelector('.interval-value');
+      if(i>=recent.length){
+        fill.style.width='0%';
+        fill.style.background='var(--green)';
+        value.textContent='Waiting';
+        return;
+      }
+      const p=recent[i];
+      // Target interval is 2/3 of the available track; 150% target fills it.
+      const pct=Math.max(0,Math.min(100,(p.interval/(target*1.5))*100));
+      fill.style.width=`${pct}%`;
+      fill.style.background=p.error < -12 ? '#7dd3fc' : p.error > 12 ? '#fca5a5' : '#86efac';
+      value.textContent=`${Math.round(p.interval)} ms (${p.error>0?'+':''}${Math.round(p.error)})`;
+    });
+  }
+
   function setStatus(text,on=false){$('statusText').textContent=text;$('statusDot').classList.toggle('on',on);}
   async function startMic(){
     if(running)return;
@@ -246,6 +298,7 @@ strong{color:var(--text)}
   $('tapBtn').addEventListener('click',()=>addNote(now(),'Tap'));
   $('resetBtn').addEventListener('click',()=>{
     points.length=0;log.length=0;lastNoteTime=null;
+    renderFourBars();
     $('lastErr').textContent='—';$('avgAbs').textContent='—';$('count').textContent='0';
     $('eventLog').textContent='No notes detected yet.';draw();
   });
