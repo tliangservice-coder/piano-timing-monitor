@@ -91,18 +91,23 @@ strong{color:var(--text)}
 
 
   <section class="panel">
-    <div class="graphhead"><h2>Last four note intervals</h2><span>Shorter = early · Longer = late</span></div>
+    <div class="graphhead"><h2>Three intervals per four-note group</h2><span>Shorter = early · Longer = late</span></div>
     <div class="interval-bars" id="intervalBars" aria-live="polite">
       <div class="interval-row"><span class="interval-label">Interval 1</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
       <div class="interval-row"><span class="interval-label">Interval 2</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
       <div class="interval-row"><span class="interval-label">Interval 3</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
-      <div class="interval-row"><span class="interval-label">Interval 4</span><div class="interval-track"><div class="interval-fill"></div></div><span class="interval-value">Waiting</span></div>
     </div>
     <div class="interval-key">
       <span>Target interval: <strong id="barTarget">500 ms</strong></span>
       <span>White marker = target length</span>
     </div>
-    <p class="note">Each bar represents the time between two consecutive detected note attacks. The target length is the same for all four bars. Blue = short/early, green = close to target, red = long/late. Bars appear together after the fifth note, once four complete intervals are available. The scale is capped at 150% of the target interval.</p>
+    <p class="note">Each bar represents the time between two consecutive detected note attacks. The three bars represent the intervals between four consecutive notes. All three update together every four detected notes and clear after one second without a detection. Blue = short/early, green = close to target, red = long/late. The scale is capped at 150% of the target interval.</p>
+  </section>
+
+  <section class="panel">
+    <div class="graphhead"><h2>Note timeline</h2><span>Each marker is a detected note</span></div>
+    <canvas id="noteTimeline" aria-label="Scrolling timeline of detected piano notes" style="height:82px"></canvas>
+    <p class="note">Note numbers identify individual attacks. Each timing-error point below is placed halfway between the two notes that formed that interval, so it lines up with the pair it measures.</p>
   </section>
 
   <section class="panel">
@@ -127,23 +132,40 @@ strong{color:var(--text)}
   const $ = id => document.getElementById(id);
   const bpmEl=$('bpm'), noteEl=$('noteValue'), windowEl=$('windowSec');
   const canvas=$('chart'), ctx=canvas.getContext('2d');
-  const points=[]; // {time, error, interval}
+  const timeline=$('noteTimeline'), tctx=timeline.getContext('2d');
+  const points=[]; // {time: midpoint of interval, error, interval}
+  const notes=[]; // {time, index}; one entry per detected note attack
   const log=[];
   let audioCtx=null, stream=null, analyser=null, source=null, rafId=null;
   let prevSpectrum=null, fluxHistory=[], lastOnset=-Infinity, lastNoteTime=null;
+  let lastDetectionTime=null, noteGroupCount=0, groupIntervals=[], displayedBarPoints=[];
   let running=false, frameCount=0;
   const now=()=>performance.now();
   function targetMs(){const bpm=Math.min(300,Math.max(30,Number(bpmEl.value)||120)); return 60000/bpm*Number(noteEl.value);}
   function updateTarget(){ $('targetText').textContent=`Target interval: ${Math.round(targetMs())} ms between notes.`; renderFourBars(); draw(); }
   function fmt(ms){if(ms===null || !Number.isFinite(ms))return '—';return `${ms>0?'+':''}${Math.round(ms)} ms`;}
   function addNote(t=now(), sourceName='Manual'){
+    // A pause longer than one second starts a fresh four-note group.
+    if(lastDetectionTime!==null && t-lastDetectionTime>1000){
+      lastNoteTime=null;
+      noteGroupCount=0;
+      groupIntervals=[];
+      displayedBarPoints=[];
+      renderFourBars();
+    }
+    lastDetectionTime=t;
+    noteGroupCount++;
     let interval=null,error=null;
+    const previousNoteTime=lastNoteTime;
+    notes.push({time:t,index:notes.length+1});
+    if(notes.length>500) notes.shift();
     if(lastNoteTime!==null){
       interval=t-lastNoteTime;
       error=interval-targetMs();
-      points.push({time:t,error,interval,errorPct:(error/targetMs())*100});
+      const point={time:(t+previousNoteTime)/2,error,interval,errorPct:(error/targetMs())*100,fromNote:notes.length-1,toNote:notes.length};
+      points.push(point);
+      groupIntervals.push(point);
       if(points.length>250) points.shift();
-      renderFourBars();
       $('lastErr').textContent=fmt(error);
       const relevant=points.slice(-30);
       $('avgAbs').textContent=`${Math.round(relevant.reduce((s,p)=>s+Math.abs(p.error),0)/Math.max(1,relevant.length))} ms`;
@@ -158,12 +180,59 @@ strong{color:var(--text)}
       if(log.length>10)log.pop();
       renderLog();
     }
+    // Four note attacks make three intervals. Publish the set together, then start a new group.
+    if(noteGroupCount===4){
+      displayedBarPoints=groupIntervals.slice(-3);
+      renderFourBars();
+      noteGroupCount=0;
+      groupIntervals=[];
+    }
     lastNoteTime=t;
+    drawTimeline();
     draw();
   }
   function renderLog(){
     $('eventLog').innerHTML=log.map(e=>`<div class="logrow"><span>${e.time} · ${e.sourceName}</span><span>${e.interval===null?'First note':`${Math.round(e.interval)} ms · ${fmt(e.error)}`}</span></div>`).join('');
   }
+  function drawTimeline(){
+    const rect=timeline.getBoundingClientRect();
+    if(!rect.width || !rect.height)return;
+    const dpr=Math.max(1,window.devicePixelRatio||1);
+    timeline.width=Math.round(rect.width*dpr); timeline.height=Math.round(rect.height*dpr);
+    tctx.setTransform(dpr,0,0,dpr,0,0);
+    const w=rect.width,h=rect.height;
+    tctx.clearRect(0,0,w,h);
+    const left=42,right=12,top=10,bottom=22,gw=w-left-right,base=top+(h-top-bottom)/2;
+    const win=Number(windowEl.value)||6, newest=now();
+    tctx.font='11px -apple-system, sans-serif';
+    tctx.textAlign='right';tctx.textBaseline='middle';tctx.fillStyle='#8998b5';tctx.fillText('notes',left-7,base);
+    tctx.beginPath();tctx.moveTo(left,base);tctx.lineTo(w-right,base);tctx.strokeStyle='#34415f';tctx.lineWidth=1;tctx.stroke();
+    tctx.textAlign='center';tctx.textBaseline='top';
+    [win,win*.5,0].forEach(age=>{
+      const x=left+gw*(1-age/win);
+      tctx.beginPath();tctx.moveTo(x,top);tctx.lineTo(x,h-bottom+1);tctx.strokeStyle='#1e2b45';tctx.stroke();
+      tctx.fillStyle='#8998b5';tctx.fillText(age===0?'now':`-${age.toFixed(age%1?1:0)}s`,x,h-bottom+5);
+    });
+    notes.forEach(n=>{
+      const age=(newest-n.time)/1000;
+      if(age<0||age>win)return;
+      const x=left+gw*(1-age/win);
+      tctx.beginPath();tctx.arc(x,base,5,0,Math.PI*2);tctx.fillStyle='#7dd3fc';tctx.fill();
+      tctx.strokeStyle='#0c1426';tctx.lineWidth=1.5;tctx.stroke();
+      // Show the note number when there is enough room to distinguish adjacent attacks.
+      const prev=notes.find(q=>q.index===n.index-1);
+      const next=notes.find(q=>q.index===n.index+1);
+      const prevX=prev?left+gw*(1-((newest-prev.time)/1000)/win):-Infinity;
+      const nextX=next?left+gw*(1-((newest-next.time)/1000)/win):Infinity;
+      if(x-prevX>25 && nextX-x>25){
+        tctx.fillStyle='#eef3ff';tctx.textAlign='center';tctx.textBaseline='bottom';tctx.fillText(String(n.index),x,base-8);
+      }
+    });
+    if(notes.length===0){tctx.fillStyle='#8b9bb9';tctx.textAlign='center';tctx.textBaseline='middle';tctx.font='12px -apple-system, sans-serif';tctx.fillText('Detected note attacks will appear here',w/2,h/2);}
+    const currentX=left+gw;
+    tctx.beginPath();tctx.moveTo(currentX,top);tctx.lineTo(currentX,h-bottom);tctx.strokeStyle='#7dd3fc';tctx.setLineDash([4,5]);tctx.stroke();tctx.setLineDash([]);
+  }
+
   function draw(){
     const rect=canvas.getBoundingClientRect();
     if(!rect.width || !rect.height)return;
@@ -216,26 +285,35 @@ strong{color:var(--text)}
     const target=targetMs();
     $('barTarget').textContent=`${Math.round(target)} ms`;
     const rows=$('intervalBars').querySelectorAll('.interval-row');
-    // Keep all four bars blank until five note attacks have produced four complete intervals.
-    // Thereafter, refresh the full set together after each new note.
-    const ready=points.length>=4;
-    const recent=ready?points.slice(-4):[];
     rows.forEach((row,i)=>{
       const fill=row.querySelector('.interval-fill');
       const value=row.querySelector('.interval-value');
-      if(!ready || i>=recent.length){
+      const p=displayedBarPoints[i];
+      if(!p){
         fill.style.width='0%';
         fill.style.background='var(--green)';
         value.textContent='Waiting';
         return;
       }
-      const p=recent[i];
       // Target interval is 2/3 of the available track; 150% target fills it.
       const pct=Math.max(0,Math.min(100,(p.interval/(target*1.5))*100));
       fill.style.width=`${pct}%`;
       fill.style.background=p.error < -12 ? '#7dd3fc' : p.error > 12 ? '#fca5a5' : '#86efac';
       value.textContent=`${Math.round(p.interval)} ms (${p.error>0?'+':''}${Math.round(p.error)})`;
     });
+  }
+
+  function clearBarsAfterSilence(){
+    if(lastDetectionTime!==null && now()-lastDetectionTime>=1000 && displayedBarPoints.length){
+      displayedBarPoints=[];
+      renderFourBars();
+    }
+    if(lastDetectionTime!==null && now()-lastDetectionTime>=1000){
+      lastDetectionTime=null;
+      lastNoteTime=null;
+      noteGroupCount=0;
+      groupIntervals=[];
+    }
   }
 
   function setStatus(text,on=false){$('statusText').textContent=text;$('statusDot').classList.toggle('on',on);}
@@ -301,7 +379,7 @@ strong{color:var(--text)}
   // Redraw continuously so the time window advances even when no new note is detected.
   let paintId=null;
   function animate(){
-    if(!document.hidden) draw();
+    if(!document.hidden){ clearBarsAfterSilence(); draw(); drawTimeline(); }
     paintId=requestAnimationFrame(animate);
   }
   animate();
@@ -310,16 +388,17 @@ strong{color:var(--text)}
   $('stopMic').addEventListener('click',stopMic);
   $('tapBtn').addEventListener('click',()=>addNote(now(),'Tap'));
   $('resetBtn').addEventListener('click',()=>{
-    points.length=0;log.length=0;lastNoteTime=null;
+    points.length=0;notes.length=0;log.length=0;lastNoteTime=null;lastDetectionTime=null;noteGroupCount=0;groupIntervals=[];displayedBarPoints=[];
     renderFourBars();
     $('lastErr').textContent='—';$('avgAbs').textContent='—';$('count').textContent='0';
-    $('eventLog').textContent='No notes detected yet.';draw();
+    $('eventLog').textContent='No notes detected yet.';draw();drawTimeline();
   });
   [bpmEl,noteEl,windowEl].forEach(el=>el.addEventListener('input',updateTarget));
   $('sensitivity').addEventListener('input',()=>{$('sensLabel').textContent=$('sensitivity').value;});
-  window.addEventListener('resize',draw);
+  window.addEventListener('resize',()=>{draw();drawTimeline();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden && running)setStatus('Listening in background may pause. Return to this tab to continue.',true);else draw();});
   updateTarget();
+  drawTimeline();
 })();
 </script>
 </body>
