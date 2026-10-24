@@ -66,11 +66,12 @@ strong{color:var(--text)}
       <div><label for="meter">Time signature (display only)</label><select id="meter"><option>2/4</option><option>3/4</option><option selected>4/4</option><option>5/4</option><option>6/8</option><option>7/8</option><option>9/8</option><option>12/8</option></select></div>
       <div><label for="noteValue">Repeated note value</label><select id="noteValue"><option value="2">Half note</option><option value="1" selected>Quarter note</option><option value="0.5">Eighth note</option><option value="0.25">Sixteenth note</option><option value="1.5">Dotted quarter</option><option value="0.75">Dotted eighth</option></select></div>
       <div><label for="windowSec">Graph window</label><select id="windowSec"><option value="4">4 seconds</option><option value="6" selected>6 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option></select></div>
+      <div><label for="filterMode">False-trigger filtering</label><select id="filterMode"><option value="sensitive">Sensitive · catches soft notes</option><option value="balanced" selected>Balanced</option><option value="strict">Strict · fewer false triggers</option></select></div>
+      <div><label for="freqRange">Frequency focus</label><select id="freqRange"><option value="full" selected>Full piano range</option><option value="mid">Reduce bass rumble</option><option value="treble">Treble notes</option></select></div>
     </div>
     <p class="note" id="targetText">Target interval: 500 ms between notes.</p>
     <div class="buttons">
       <button class="primary" id="startMic">Start microphone</button>
-      <button class="secondary" id="tapBtn">Add note manually</button>
       <button class="secondary" id="stopMic" disabled>Stop microphone</button>
       <button class="danger" id="resetBtn">Reset graph</button>
     </div>
@@ -78,6 +79,10 @@ strong{color:var(--text)}
     <div style="margin-top:12px">
       <label for="sensitivity">Onset sensitivity <span id="sensLabel">5</span> / 10</label>
       <input id="sensitivity" type="range" min="1" max="10" value="5">
+    </div>
+    <div style="margin-top:12px">
+      <label for="noiseGate">Minimum signal level <span id="gateLabel">-48</span> dB</label>
+      <input id="noiseGate" type="range" min="-60" max="-30" step="3" value="-48">
     </div>
   </section>
 
@@ -105,12 +110,6 @@ strong{color:var(--text)}
   </section>
 
   <section class="panel">
-    <div class="graphhead"><h2>Note timeline</h2><span>Each marker is a detected note</span></div>
-    <canvas id="noteTimeline" aria-label="Scrolling timeline of detected piano notes" style="height:82px"></canvas>
-    <p class="note">Note numbers identify individual attacks. Each timing-error point below is placed halfway between the two notes that formed that interval, so it lines up with the pair it measures.</p>
-  </section>
-
-  <section class="panel">
     <div class="graphhead"><h2>Timing variation</h2><span>Scrolls left in real time</span></div>
     <canvas id="chart" aria-label="Graph of interval timing errors"></canvas>
     <div class="legend">
@@ -118,13 +117,13 @@ strong{color:var(--text)}
       <span><i class="key" style="background:#7dd3fc"></i>Early interval (shorter than target)</span>
       <span><i class="key" style="background:#86efac"></i>On target</span>
     </div>
-    <p class="note">Each point shows interval error as a percentage of the target interval, from -100% to +100%. Points outside that range are omitted. Above zero = late/too long; below zero = early/too short. This measures spacing between notes, not whether the whole phrase is ahead of the beat.</p>
+    <p class="note">Each point shows interval error as a percentage of the target interval, from -100% to +100%. Errors beyond that range are shown at the top or bottom edge. A thin grey line connects consecutive visible points. Above zero = late/too long; below zero = early/too short. This measures spacing between notes, not whether the whole phrase is ahead of the beat.</p>
   </section>
 
   <section class="panel">
     <div class="graphhead"><h2>Recent detections</h2><span>Newest first</span></div>
     <div id="eventLog" style="margin-top:8px">No notes detected yet.</div>
-    <p class="note">For best results, place the phone near the piano but away from loud speakers. The microphone detector is experimental: chords, sustain pedal, room noise, and very fast notes can cause missed or extra detections. Manual tap is available as a fallback.</p>
+    <p class="note">For best results, place the phone near the piano but away from loud speakers. Use Strict filtering and a higher signal gate to reduce false triggers; use Sensitive mode for soft notes. Chords, sustain pedal, room noise, and very fast notes can still affect detection.</p>
   </section>
 </main>
 <script>
@@ -132,9 +131,7 @@ strong{color:var(--text)}
   const $ = id => document.getElementById(id);
   const bpmEl=$('bpm'), noteEl=$('noteValue'), windowEl=$('windowSec');
   const canvas=$('chart'), ctx=canvas.getContext('2d');
-  const timeline=$('noteTimeline'), tctx=timeline.getContext('2d');
   const points=[]; // {time: midpoint of interval, error, interval}
-  const notes=[]; // {time, index}; one entry per detected note attack
   const log=[];
   let audioCtx=null, stream=null, analyser=null, source=null, rafId=null;
   let prevSpectrum=null, fluxHistory=[], lastOnset=-Infinity, lastNoteTime=null;
@@ -157,15 +154,12 @@ strong{color:var(--text)}
     noteGroupCount++;
     let interval=null,error=null;
     const previousNoteTime=lastNoteTime;
-    notes.push({time:t,index:notes.length+1});
-    if(notes.length>500) notes.shift();
     if(lastNoteTime!==null){
       interval=t-lastNoteTime;
       error=interval-targetMs();
-      const point={time:(t+previousNoteTime)/2,error,interval,errorPct:(error/targetMs())*100,fromNote:notes.length-1,toNote:notes.length};
+      const point={time:(t+previousNoteTime)/2,error,interval,errorPct:(error/targetMs())*100};
       points.push(point);
       groupIntervals.push(point);
-      if(points.length>250) points.shift();
       $('lastErr').textContent=fmt(error);
       const relevant=points.slice(-30);
       $('avgAbs').textContent=`${Math.round(relevant.reduce((s,p)=>s+Math.abs(p.error),0)/Math.max(1,relevant.length))} ms`;
@@ -188,49 +182,10 @@ strong{color:var(--text)}
       groupIntervals=[];
     }
     lastNoteTime=t;
-    drawTimeline();
     draw();
   }
   function renderLog(){
     $('eventLog').innerHTML=log.map(e=>`<div class="logrow"><span>${e.time} · ${e.sourceName}</span><span>${e.interval===null?'First note':`${Math.round(e.interval)} ms · ${fmt(e.error)}`}</span></div>`).join('');
-  }
-  function drawTimeline(){
-    const rect=timeline.getBoundingClientRect();
-    if(!rect.width || !rect.height)return;
-    const dpr=Math.max(1,window.devicePixelRatio||1);
-    timeline.width=Math.round(rect.width*dpr); timeline.height=Math.round(rect.height*dpr);
-    tctx.setTransform(dpr,0,0,dpr,0,0);
-    const w=rect.width,h=rect.height;
-    tctx.clearRect(0,0,w,h);
-    const left=42,right=12,top=10,bottom=22,gw=w-left-right,base=top+(h-top-bottom)/2;
-    const win=Number(windowEl.value)||6, newest=now();
-    tctx.font='11px -apple-system, sans-serif';
-    tctx.textAlign='right';tctx.textBaseline='middle';tctx.fillStyle='#8998b5';tctx.fillText('notes',left-7,base);
-    tctx.beginPath();tctx.moveTo(left,base);tctx.lineTo(w-right,base);tctx.strokeStyle='#34415f';tctx.lineWidth=1;tctx.stroke();
-    tctx.textAlign='center';tctx.textBaseline='top';
-    [win,win*.5,0].forEach(age=>{
-      const x=left+gw*(1-age/win);
-      tctx.beginPath();tctx.moveTo(x,top);tctx.lineTo(x,h-bottom+1);tctx.strokeStyle='#1e2b45';tctx.stroke();
-      tctx.fillStyle='#8998b5';tctx.fillText(age===0?'now':`-${age.toFixed(age%1?1:0)}s`,x,h-bottom+5);
-    });
-    notes.forEach(n=>{
-      const age=(newest-n.time)/1000;
-      if(age<0||age>win)return;
-      const x=left+gw*(1-age/win);
-      tctx.beginPath();tctx.arc(x,base,5,0,Math.PI*2);tctx.fillStyle='#7dd3fc';tctx.fill();
-      tctx.strokeStyle='#0c1426';tctx.lineWidth=1.5;tctx.stroke();
-      // Show the note number when there is enough room to distinguish adjacent attacks.
-      const prev=notes.find(q=>q.index===n.index-1);
-      const next=notes.find(q=>q.index===n.index+1);
-      const prevX=prev?left+gw*(1-((newest-prev.time)/1000)/win):-Infinity;
-      const nextX=next?left+gw*(1-((newest-next.time)/1000)/win):Infinity;
-      if(x-prevX>25 && nextX-x>25){
-        tctx.fillStyle='#eef3ff';tctx.textAlign='center';tctx.textBaseline='bottom';tctx.fillText(String(n.index),x,base-8);
-      }
-    });
-    if(notes.length===0){tctx.fillStyle='#8b9bb9';tctx.textAlign='center';tctx.textBaseline='middle';tctx.font='12px -apple-system, sans-serif';tctx.fillText('Detected note attacks will appear here',w/2,h/2);}
-    const currentX=left+gw;
-    tctx.beginPath();tctx.moveTo(currentX,top);tctx.lineTo(currentX,h-bottom);tctx.strokeStyle='#7dd3fc';tctx.setLineDash([4,5]);tctx.stroke();tctx.setLineDash([]);
   }
 
   function draw(){
@@ -258,17 +213,27 @@ strong{color:var(--text)}
       ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+gh);ctx.strokeStyle='#1e2b45';ctx.stroke();
       ctx.fillStyle='#8998b5';ctx.fillText(age===0?'now':`-${age.toFixed(age%1?1:0)}s`,x,h-bottom+7);
     });
-    // Latest note is centered; prior events shift left according to age.
+    // Keep every interval in history. Only points within the time window are visible;
+    // out-of-range errors are pinned to +/-100% so no dot disappears beyond the y-axis.
     const newest=now();
     const centerX=left+gw;
+    const visible=[];
     points.forEach(p=>{
       const age=(newest-p.time)/1000;
       if(age<0 || age>win)return;
       const x=left+gw*(1-age/win);
-      const pct=p.errorPct;
-      // Omit outliers outside the visible +/-100% error range instead of pinning them to the edge.
-      if(pct < -100 || pct > 100) return;
+      const pct=Math.max(-100,Math.min(100,p.errorPct));
       const y=mid-(pct/scale)*(gh/2);
+      visible.push({x,y,p});
+    });
+    // Connect consecutive visible dots with a thin grey line.
+    if(visible.length>1){
+      ctx.beginPath();
+      ctx.moveTo(visible[0].x,visible[0].y);
+      for(let i=1;i<visible.length;i++)ctx.lineTo(visible[i].x,visible[i].y);
+      ctx.strokeStyle='#9ca3af';ctx.lineWidth=1.5;ctx.stroke();
+    }
+    visible.forEach(({x,y,p})=>{
       const color=p.error>12?'#fca5a5':p.error< -12?'#7dd3fc':'#86efac';
       ctx.beginPath();ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
       ctx.strokeStyle='#0c1426';ctx.lineWidth=1.5;ctx.stroke();
@@ -334,23 +299,34 @@ strong{color:var(--text)}
       const loop=()=>{
         if(!running)return;
         analyser.getFloatFrequencyData(curr);
-        let flux=0, energy=0;
-        for(let i=2;i<curr.length;i++){
+        let flux=0, energy=0, peakDb=-Infinity;
+        const focus=$('freqRange').value;
+        const nyquist=audioCtx.sampleRate/2;
+        const minHz=focus==='mid'?180:(focus==='treble'?500:45);
+        const maxHz=focus==='treble'?8000:(focus==='mid'?5000:10000);
+        for(let i=1;i<curr.length;i++){
+          const hz=i*nyquist/(curr.length-1);
+          if(hz<minHz || hz>maxHz)continue;
           // Work in normalized linear magnitudes; positive spectral changes indicate a new attack.
           const mag=Math.pow(10,curr[i]/20);
           const old=Math.pow(10,prevSpectrum[i]/20);
           const diff=mag-old;
           if(diff>0)flux+=diff;
           energy+=mag;
+          if(curr[i]>peakDb)peakDb=curr[i];
         }
-        // Ignore near-silence and very low-frequency rumble.
+        // Frequency focus excludes rumble; peak-level gate rejects low-level room noise.
         const score=flux/(energy+0.00001);
         const historyMean=fluxHistory.length?fluxHistory.reduce((a,b)=>a+b,0)/fluxHistory.length:0;
         const sens=Number($('sensitivity').value);
-        const threshold=0.018+(11-sens)*0.004;
-        const adaptive=Math.max(threshold,historyMean*(1.8+(11-sens)*0.12));
+        const mode=$('filterMode').value;
+        const modeThreshold=mode==='strict'?1.45:(mode==='sensitive'?0.78:1);
+        const adaptiveFactor=mode==='strict'?2.5:(mode==='sensitive'?1.35:1.8);
+        const threshold=(0.018+(11-sens)*0.004)*modeThreshold;
+        const adaptive=Math.max(threshold,historyMean*(adaptiveFactor+(11-sens)*0.10));
+        const gate=Number($('noiseGate').value)||-48;
         const t=now();
-        if(energy>0.025 && score>adaptive && t-lastOnset>150){
+        if(peakDb>gate && energy>0.008 && score>adaptive){
           addNote(t,'Mic');lastOnset=t;
         }
         fluxHistory.push(score);if(fluxHistory.length>35)fluxHistory.shift();
@@ -379,26 +355,25 @@ strong{color:var(--text)}
   // Redraw continuously so the time window advances even when no new note is detected.
   let paintId=null;
   function animate(){
-    if(!document.hidden){ clearBarsAfterSilence(); draw(); drawTimeline(); }
+    if(!document.hidden){ clearBarsAfterSilence(); draw(); }
     paintId=requestAnimationFrame(animate);
   }
   animate();
 
   $('startMic').addEventListener('click',startMic);
   $('stopMic').addEventListener('click',stopMic);
-  $('tapBtn').addEventListener('click',()=>addNote(now(),'Tap'));
   $('resetBtn').addEventListener('click',()=>{
-    points.length=0;notes.length=0;log.length=0;lastNoteTime=null;lastDetectionTime=null;noteGroupCount=0;groupIntervals=[];displayedBarPoints=[];
+    points.length=0;log.length=0;lastNoteTime=null;lastDetectionTime=null;noteGroupCount=0;groupIntervals=[];displayedBarPoints=[];
     renderFourBars();
     $('lastErr').textContent='—';$('avgAbs').textContent='—';$('count').textContent='0';
-    $('eventLog').textContent='No notes detected yet.';draw();drawTimeline();
+    $('eventLog').textContent='No notes detected yet.';draw();
   });
   [bpmEl,noteEl,windowEl].forEach(el=>el.addEventListener('input',updateTarget));
   $('sensitivity').addEventListener('input',()=>{$('sensLabel').textContent=$('sensitivity').value;});
-  window.addEventListener('resize',()=>{draw();drawTimeline();});
+  $('noiseGate').addEventListener('input',()=>{$('gateLabel').textContent=$('noiseGate').value;});
+  window.addEventListener('resize',draw);
   document.addEventListener('visibilitychange',()=>{if(document.hidden && running)setStatus('Listening in background may pause. Return to this tab to continue.',true);else draw();});
   updateTarget();
-  drawTimeline();
 })();
 </script>
 </body>
